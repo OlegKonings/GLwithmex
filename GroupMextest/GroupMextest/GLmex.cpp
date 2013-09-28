@@ -17,12 +17,14 @@
 #define _HTD cudaMemcpyHostToDevice
 
 //make sure these match the .cu THREADS and BLOCK_SIZE
-#define CPPTHREADS 64
+#define CPPTHREADS 64//This is 64 due to expectation that data sets will be small, if (m*n)>= 1e6 then use 256 THREADS(adjust here and in .cu file)
 #define CPPBLOCK_SIZE 16
 
 void inline checkError(cublasStatus_t status, const char *msg){if (status != CUBLAS_STATUS_SUCCESS){printf("%s", msg);exit(EXIT_FAILURE);}}
 
 //NOTE: all cublas calls are done in this cpp, and all CUDA kernels are in GLcuda.cu, and accessed via extern "C"
+// using wraps for all GPU kernel calls
+
 extern "C" void generateEye_wrap(float *E, const int N,const int numBlocks);
 extern "C" void gpu_inplace_vector_scale_wrap(float *V, const int size,const float _s,const int numBlocks);
 extern "C" void gpu_vector_add_wrap(const float *a, const float *b, float *result, const int size, const bool add,const int numBlocks);
@@ -36,7 +38,7 @@ extern "C" void d_choldc_strip_wrap(float *M, int boffset,const int N,const dim3
 
 void mexFunction(int nlhs, mxArray *plhs[], int nrhs, mxArray const *prhs[]){//will take in 11 inputs and return 2 outputs
 	/*inputs are (in order)
-	0) Matrix A (m,n) single precision floating point numbers (32 bit) in DENSE form
+	0) Matrix A (m,n) single precision floating point numbers (32 bit) in DENSE form AND must be passed into mex in TRANSPOSE form due to row-major format(will adjust m and n internally)
 	1) vector b (m,1) single precision floating point numbers
 	2) vector p (Psize length) 32 bit integer of K(Psize) length (partitions)
 	3) vector u (n,1) single precision floating point numbers
@@ -70,9 +72,9 @@ void mexFunction(int nlhs, mxArray *plhs[], int nrhs, mxArray const *prhs[]){//w
 	float *u=(float *)mxGetPr(prhs[3]);//vector u
 	float *z=(float *)mxGetPr(prhs[4]);//vector z
 
-	const int Arows=mxGetM(prhs[0]);
-	const int Acols=mxGetN(prhs[0]);
-	printf("Arows=%d Acols=%d\n",Arows,Acols);
+	const int Arows=mxGetN(prhs[0]);//since this Group Lasso solver internally uses row major, need to pass in input A as A' from Matlab, then swap (m,n)
+	const int Acols=mxGetM(prhs[0]);//ditto, swaping due to A' being passed in to mex interface
+	//printf("Arows=%d Acols=%d\n",Arows,Acols);
 	const int Psize=mxGetM(prhs[2]);
 	const float _rho=(float)mxGetScalar(prhs[5]);
 	const float _alpha=(float)mxGetScalar(prhs[6]);
@@ -83,10 +85,10 @@ void mexFunction(int nlhs, mxArray *plhs[], int nrhs, mxArray const *prhs[]){//w
 
 
 	cublasHandle_t handle;//init cublas_v2
-	cublasStatus_t ret;
-	ret = cublasCreate(&handle);
-	if (ret != CUBLAS_STATUS_SUCCESS){
-		printf("cublasCreate returned error code %d, line(%d)\n", ret, __LINE__);
+	cublasStatus_t cur;
+	cur = cublasCreate(&handle);
+	if (cur != CUBLAS_STATUS_SUCCESS){
+		printf("cublasCreate returned error code %d, line(%d)\n", cur, __LINE__);
 		exit(EXIT_FAILURE);
 	}
 
@@ -102,9 +104,8 @@ void mexFunction(int nlhs, mxArray *plhs[], int nrhs, mxArray const *prhs[]){//w
 		return;
 	}
 	
-	cublasStatus_t cur;
 	const float _beta=0.0f,t_alphA=1.0f;
-	unsigned int numbytesM=Arows*Acols*sizeof(float),numbytesVC=Acols*sizeof(float),numbytesVR=Arows*sizeof(float);
+	const unsigned int numbytesM=Arows*Acols*sizeof(float),numbytesVC=Acols*sizeof(float),numbytesVR=Arows*sizeof(float);
 
 	float *D_A,*D_b,*D_xresult,*D_Atb,*D_u,*D_z,*tempvecC,*tempvecC2,*tempvecR,*x_hat,*L,*tmpM2;//all device memory allocations
 	//allocate all device memory
@@ -156,8 +157,8 @@ void mexFunction(int nlhs, mxArray *plhs[], int nrhs, mxArray const *prhs[]){//w
 	err=cudaMemset(D_xresult,0,numbytesVC);//start x off with zeros
 	if(err!=cudaSuccess){printf("%s in %s at line %d\n",cudaGetErrorString(err),__FILE__,__LINE__);}
 	//now all device memory allocated, copied and set to initial values
-	//Atb = A'*b;
 
+	//Atb = A'*b;
 	cur=cublasSgemv_v2(handle,CUBLAS_OP_N,Acols,Arows,&t_alphA,D_A,Acols,D_b,1,&_beta,D_Atb,1);//Atb=AT*b,since D_A starts in row-major, not need to tranpose
 	if (cur != CUBLAS_STATUS_SUCCESS){
 		printf("error code %d, line(%d)\n", cur, __LINE__);

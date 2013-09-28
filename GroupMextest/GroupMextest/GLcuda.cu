@@ -138,7 +138,6 @@ extern "C" void d_choldc_topleft_wrap(float *M, int boffset,const int N,const di
 __global__ void d_choldc_strip(float *M,int boffset,const int N){
 // +1 since blockoffset labels the "topleft" position
 // and boff is the working position...
-    int boffy=boffset;
     int boffx = blockIdx.x+boffset+1; 
     int tx = threadIdx.x,ty = threadIdx.y;
 	int idx0=ty+BLOCK_SIZE*boffset,adj=tx+BLOCK_SIZE*boffset;
