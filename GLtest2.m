@@ -1,5 +1,5 @@
-m=int32(5632);
-K=int32(208);
+m=int32(1536);
+K=int32(44);
 density=single(100);
 
 [ A,b,partition,lambda ] = GenerateRandomGroupLassoDataSet( m,K,density );
@@ -24,15 +24,19 @@ u=single(zeros(n,1));
 z=single(zeros(n,1));
 
 AA=A';
+disp('partition sum= ');
 dd=sum(partition);
 disp(dd);
-disp(n);
+disp('m=');
 disp(m);
+disp('n=');
+disp(n);
 tic;
 [nxtu,nxtz]=GroupMextest(AA,b,partition,u,z,rho,alpha,lambda,MAX_ITER,ABSTOL,RELTOL);% for this version matrix A must be passed in transpose (CUDA solver uses row major)
 toc;
 gtime=(toc-tic);
 disp(gtime);
+
 
 tic;
 
@@ -106,6 +110,9 @@ disp('vector u diff');
 disp(norm(nxtu-u));
 disp('vector z diff');
 disp(norm(nxtz-z));
+disp('maxes');
+disp(max(u));
+disp(max(z));
 
 
     
