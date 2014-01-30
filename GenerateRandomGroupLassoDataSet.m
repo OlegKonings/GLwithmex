@@ -2,7 +2,7 @@ function [ A,b,partition,lambda ] = GenerateRandomGroupLassoDataSet( m,K,density
 
 flag=true;
 while flag
-    partition = int32(randi(128, [K 1]));% per Boyd example
+    partition = int32(randi(320, [K 1]));% per Boyd example
     n = int32(sum(partition)); % number of features
     if (mod(n,16))==0
         flag=false;

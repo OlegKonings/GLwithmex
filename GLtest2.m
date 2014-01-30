@@ -1,12 +1,12 @@
 m=int32(1536);
-K=int32(44);
+K=int32(20);
 density=single(100);
 
 [ A,b,partition,lambda ] = GenerateRandomGroupLassoDataSet( m,K,density );
 
 disp(lambda);
 
-MAX_ITER = int32(1000);
+MAX_ITER = int32(100);
 ABSTOL   = single(1e-4);
 RELTOL   = single(1e-2);
 

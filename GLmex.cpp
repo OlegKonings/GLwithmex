@@ -18,9 +18,9 @@
 //make sure these match the .cu THREADS and BLOCK_SIZE
 #define CPPTHREADS 64//This is 64 due to expectation that data sets will be small, if (m*n)>= 1e6 then use 256 THREADS(adjust here and in .cu file)
 #define CPPBLOCK_SIZE 16
-#define MEGA (1<<12)
+#define MEGA (1<<8)
 
-const int blockSize0=128;//
+const int blockSize0=64;//
 
 void inline checkError(cublasStatus_t status, const char *msg){if (status != CUBLAS_STATUS_SUCCESS){printf("%s", msg);exit(EXIT_FAILURE);}}
 

@@ -17,7 +17,7 @@
 
 #define LINEAR_BLOCK_SIZE THREADS
 
-const int blockSizeLocal=128;
+const int blockSizeLocal=64;
 
 //general use kernels
 /////////////////////////////////////////////////////////////////////////////////////
