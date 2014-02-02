@@ -1,5 +1,5 @@
-m=int32(1536);
-K=int32(20);
+m=int32(1968);
+K=int32(13);
 density=single(100);
 
 [ A,b,partition,lambda ] = GenerateRandomGroupLassoDataSet( m,K,density );
@@ -23,6 +23,13 @@ n=int32(n);
 u=single(zeros(n,1));
 z=single(zeros(n,1));
 
+do_obj=int32(0);
+do_lam=int32(0);
+
+lambda_counter=int32(0);
+lambda_update_count=int32(10);
+lambda_update_thresh=single(10^-5);
+
 AA=A';
 disp('partition sum= ');
 dd=sum(partition);
@@ -32,7 +39,7 @@ disp(m);
 disp('n=');
 disp(n);
 tic;
-[nxtu,nxtz]=GroupMextest(AA,b,partition,u,z,rho,alpha,lambda,MAX_ITER,ABSTOL,RELTOL);% for this version matrix A must be passed in transpose (CUDA solver uses row major)
+[nxtu,nxtz]=GroupMextest(AA,b,partition,u,z,rho,alpha,lambda,MAX_ITER,ABSTOL,RELTOL,do_obj,do_lam);% for this version matrix A must be passed in transpose (CUDA solver uses row major)
 toc;
 gtime=(toc-tic);
 disp(gtime);
@@ -84,15 +91,29 @@ for k = 1:MAX_ITER
     history.eps_dual(k)= sqrt(single(n))*ABSTOL + RELTOL*norm(rho*u);
  
  
+   
     if ~QUIET
         fprintf('%3d\t%10.4f\t%10.4f\t%10.4f\t%10.4f\t%10.2f\n', k, ...
             history.r_norm(k), history.eps_pri(k), ...
             history.s_norm(k), history.eps_dual(k), history.objval(k));
     end
  
-    if (history.r_norm(k) <=history.eps_pri(k) && ...
-       history.s_norm(k) <=history.eps_dual(k))
+    if (history.r_norm(k) <history.eps_pri(k) && ...
+       history.s_norm(k) <history.eps_dual(k))
          break;
+    end
+     if do_lam && k>1
+        if  abs(history.r_norm(k)-history.r_norm(k-1)) < lambda_update_thresh ...
+            && abs(history.s_norm(k)-history.s_norm(k-1)) < lambda_update_thresh
+        
+            lambda_counter = lambda_counter + 1;
+            if lambda_counter > lambda_update_count
+                lambda=lambda*single(0.1);
+                lambda_counter=0;
+            end
+                    
+        end
+            
     end
     
 end

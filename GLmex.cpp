@@ -39,6 +39,9 @@ extern "C" void d_choldc_strip_wrap(float *M, int boffset,const int N,const dim3
 extern "C" void z_shrinkage_wrap(float *D_z,const float *x_hat, const float *D_u,float *norm_s, float *t_obj_arr, float *z_norm_sum,
 	const int adj_size,dim3 &PGrid, const int *D_cuml_part, const int rem_start, const float kappa,const int num_blx,
 	cudaError_t &err);
+extern "C" void get_multi_norms(const float *x, const float *z, const float *zold, const float *u,
+	float *norm_arr,const float _rho, const int length);
+extern "C" void update_vector_q(const float *Atb, const float *z, const float *u, float *q, const float rho,const int length);
 
 inline int get_adj_size(int num_elem){
 	float p=float(num_elem)/float(MEGA);
@@ -55,7 +58,7 @@ inline int get_padded_dimension(const int a){
 	return (a%16==0) ? a:(((a+16-1)>>3)<<3);
 }
 
-void mexFunction(int nlhs, mxArray *plhs[], int nrhs, mxArray const *prhs[]){//will take in 11 inputs and return 2 outputs
+void mexFunction(int nlhs, mxArray *plhs[], int nrhs, mxArray const *prhs[]){//will take in 13 inputs and return 2 outputs
 	/*inputs are (in order)
 	0) Matrix A (m,n) single precision floating point numbers (32 bit) in DENSE form AND must be passed into mex in TRANSPOSE form due to row-major format(will adjust m and n internally)
 	1) vector b (m,1) single precision floating point numbers
@@ -68,6 +71,8 @@ void mexFunction(int nlhs, mxArray *plhs[], int nrhs, mxArray const *prhs[]){//w
 	8) integer max_iter
 	9) float (single) abstol
 	10) float (single) reltol
+	11) integer do_objective (if not Null(0) thencalculates objective part, other does not)
+	12) integer do_lambda_update (if not Null(0) then does lambda update)
 
 	outputs are (in order)
 	0) vector u (n,1) single precision floating point numbers
@@ -91,25 +96,24 @@ void mexFunction(int nlhs, mxArray *plhs[], int nrhs, mxArray const *prhs[]){//w
 	float *u=(float *)mxGetPr(prhs[3]);//vector u
 	float *z=(float *)mxGetPr(prhs[4]);//vector z
 
-	const int Arows=mxGetN(prhs[0]);//since this Group Lasso solver internally uses row major, need to pass in input A as A' from Matlab, then swap (m,n)
-	const int Acols=mxGetM(prhs[0]);//ditto, swaping due to A' being passed in to mex interface
+	const int Arows=(int)mxGetN(prhs[0]);//since this Group Lasso solver internally uses row major, need to pass in input A as A' from Matlab, then swap (m,n)
+	const int Acols=(int)mxGetM(prhs[0]);//ditto, swaping due to A' being passed in to mex interface
 	//printf("Arows=%d Acols=%d\n",Arows,Acols);
-	const int Psize=mxGetM(prhs[2]);
+	const int Psize=(int)mxGetM(prhs[2]);
 	const float _rho=(float)mxGetScalar(prhs[5]);
 	const float _alpha=(float)mxGetScalar(prhs[6]);
-	const float _lambda=(float)mxGetScalar(prhs[7]);
+	float _lambda=(float)mxGetScalar(prhs[7]);//not const, will be changed
 	const int max_iter=(int)mxGetScalar(prhs[8]);
 	const float abstol=(float)mxGetScalar(prhs[9]);
 	const float reltol=(float)mxGetScalar(prhs[10]);
+	const int do_objective=(int)mxGetScalar(prhs[11]);
+	const int do_lambda_update=(int)mxGetScalar(prhs[12]);
 
 
 	cublasHandle_t handle;//init cublas_v2
 	cublasStatus_t cur;
 	cur = cublasCreate(&handle);
-	if (cur != CUBLAS_STATUS_SUCCESS){
-		printf("cublasCreate returned error code %d, line(%d)\n", cur, __LINE__);
-		exit(EXIT_FAILURE);
-	}
+	//if (cur != CUBLAS_STATUS_SUCCESS){printf("cublasCreate returned error code %d, line(%d)\n", cur, __LINE__);exit(EXIT_FAILURE);}
 
 	int tot=0,max_block_size=1;
 	int *cum_part=(int *)malloc(Psize*sizeof(int));
@@ -132,25 +136,25 @@ void mexFunction(int nlhs, mxArray *plhs[], int nrhs, mxArray const *prhs[]){//w
 	int *D_cuml_part;
 	//allocate all device memory
     cudaError_t err=cudaMalloc((void **)&D_A,numbytesM);
-	if(err!=cudaSuccess){printf("%s in %s at line %d\n",cudaGetErrorString(err),__FILE__,__LINE__);}
+	//if(err!=cudaSuccess){printf("%s in %s at line %d\n",cudaGetErrorString(err),__FILE__,__LINE__);}
 	err=cudaMalloc((void **)&D_b,numbytesVR);
-	if(err!=cudaSuccess){printf("%s in %s at line %d\n",cudaGetErrorString(err),__FILE__,__LINE__);}
+	//if(err!=cudaSuccess){printf("%s in %s at line %d\n",cudaGetErrorString(err),__FILE__,__LINE__);}
 	err=cudaMalloc((void **)&D_xresult,numbytesVC);
-	if(err!=cudaSuccess){printf("%s in %s at line %d\n",cudaGetErrorString(err),__FILE__,__LINE__);}
+	//if(err!=cudaSuccess){printf("%s in %s at line %d\n",cudaGetErrorString(err),__FILE__,__LINE__);}
 	err=cudaMalloc((void **)&D_Atb,numbytesVC);
-	if(err!=cudaSuccess){printf("%s in %s at line %d\n",cudaGetErrorString(err),__FILE__,__LINE__);}
+	//if(err!=cudaSuccess){printf("%s in %s at line %d\n",cudaGetErrorString(err),__FILE__,__LINE__);}
 	err=cudaMalloc((void **)&D_u,numbytesVC);
-	if(err!=cudaSuccess){printf("%s in %s at line %d\n",cudaGetErrorString(err),__FILE__,__LINE__);}
+	//if(err!=cudaSuccess){printf("%s in %s at line %d\n",cudaGetErrorString(err),__FILE__,__LINE__);}
 	err=cudaMalloc((void **)&D_z,numbytesVC);
-	if(err!=cudaSuccess){printf("%s in %s at line %d\n",cudaGetErrorString(err),__FILE__,__LINE__);}
+	//if(err!=cudaSuccess){printf("%s in %s at line %d\n",cudaGetErrorString(err),__FILE__,__LINE__);}
 	err=cudaMalloc((void **)&tempvecC,numbytesVC);
-	if(err!=cudaSuccess){printf("%s in %s at line %d\n",cudaGetErrorString(err),__FILE__,__LINE__);}
+	//if(err!=cudaSuccess){printf("%s in %s at line %d\n",cudaGetErrorString(err),__FILE__,__LINE__);}
 	err=cudaMalloc((void **)&tempvecC2,numbytesVC);
-	if(err!=cudaSuccess){printf("%s in %s at line %d\n",cudaGetErrorString(err),__FILE__,__LINE__);}
+	//if(err!=cudaSuccess){printf("%s in %s at line %d\n",cudaGetErrorString(err),__FILE__,__LINE__);}
 	err=cudaMalloc((void **)&tempvecR,numbytesVR);
-	if(err!=cudaSuccess){printf("%s in %s at line %d\n",cudaGetErrorString(err),__FILE__,__LINE__);}
+	//if(err!=cudaSuccess){printf("%s in %s at line %d\n",cudaGetErrorString(err),__FILE__,__LINE__);}
 	err=cudaMalloc((void **)&x_hat,numbytesVC);
-	if(err!=cudaSuccess){printf("%s in %s at line %d\n",cudaGetErrorString(err),__FILE__,__LINE__);}
+	//if(err!=cudaSuccess){printf("%s in %s at line %d\n",cudaGetErrorString(err),__FILE__,__LINE__);}
 
 	const int num_k_bytes=Psize*sizeof(float);
 	const int adj_size=get_adj_size(max_block_size);
@@ -162,13 +166,13 @@ void mexFunction(int nlhs, mxArray *plhs[], int nrhs, mxArray const *prhs[]){//w
 	dim3 PGrid(num_blx,Psize,1);
 	
 	err=cudaMalloc((void **)&norm_s,num_k_bytes);
-	if(err!=cudaSuccess){printf("%s in %s at line %d\n",cudaGetErrorString(err),__FILE__,__LINE__);}
+	//if(err!=cudaSuccess){printf("%s in %s at line %d\n",cudaGetErrorString(err),__FILE__,__LINE__);}
 	err=cudaMalloc((void **)&t_obj_arr,num_k_bytes);
-	if(err!=cudaSuccess){printf("%s in %s at line %d\n",cudaGetErrorString(err),__FILE__,__LINE__);}
+	//if(err!=cudaSuccess){printf("%s in %s at line %d\n",cudaGetErrorString(err),__FILE__,__LINE__);}
 	err=cudaMalloc((void **)&z_norm_sum,sizeof(float));
-	if(err!=cudaSuccess){printf("%s in %s at line %d\n",cudaGetErrorString(err),__FILE__,__LINE__);}
+	//if(err!=cudaSuccess){printf("%s in %s at line %d\n",cudaGetErrorString(err),__FILE__,__LINE__);}
 	err=cudaMalloc((void **)&D_cuml_part,Psize*sizeof(int));
-	if(err!=cudaSuccess){printf("%s in %s at line %d\n",cudaGetErrorString(err),__FILE__,__LINE__);}
+	//if(err!=cudaSuccess){printf("%s in %s at line %d\n",cudaGetErrorString(err),__FILE__,__LINE__);}
 
 	//note: if 'skinny' the the dim of L and U will be Acols x Acols, otherwise the dim of L and U will be Arows x Arows
 	const bool skinny= (Arows>=Acols);
@@ -176,51 +180,51 @@ void mexFunction(int nlhs, mxArray *plhs[], int nrhs, mxArray const *prhs[]){//w
 	const int numBytesT=N*N*sizeof(float),numBlocks=((N*N + CPPTHREADS-1)/CPPTHREADS);
 	
 	err=cudaMalloc((void **)&L,numBytesT);
-	if(err!=cudaSuccess){printf("%s in %s at line %d\n",cudaGetErrorString(err),__FILE__,__LINE__);}
+	//if(err!=cudaSuccess){printf("%s in %s at line %d\n",cudaGetErrorString(err),__FILE__,__LINE__);}
 	err=cudaMalloc((void **)&tmpM2,numBytesT);
-	if(err!=cudaSuccess){printf("%s in %s at line %d\n",cudaGetErrorString(err),__FILE__,__LINE__);}
+	//if(err!=cudaSuccess){printf("%s in %s at line %d\n",cudaGetErrorString(err),__FILE__,__LINE__);}
 
 	generateEye_wrap(tmpM2,N,numBlocks);
 
 	err=cudaMemcpy(L,tmpM2,numBytesT,_DTD);//copy eye matrix for inversion use to L
-	if(err!=cudaSuccess){printf("%s in %s at line %d\n",cudaGetErrorString(err),__FILE__,__LINE__);}
+	//if(err!=cudaSuccess){printf("%s in %s at line %d\n",cudaGetErrorString(err),__FILE__,__LINE__);}
 
 	err=cudaMemcpy(D_A,A,numbytesM,_HTD);//D_A gets A's vals
-	if(err!=cudaSuccess){printf("%s in %s at line %d\n",cudaGetErrorString(err),__FILE__,__LINE__);}
+	//if(err!=cudaSuccess){printf("%s in %s at line %d\n",cudaGetErrorString(err),__FILE__,__LINE__);}
 	err=cudaMemcpy(D_b,b,numbytesVR,_HTD);//copy over vector b
-	if(err!=cudaSuccess){printf("%s in %s at line %d\n",cudaGetErrorString(err),__FILE__,__LINE__);}
+	//if(err!=cudaSuccess){printf("%s in %s at line %d\n",cudaGetErrorString(err),__FILE__,__LINE__);}
 	err=cudaMemcpy(D_u,u,numbytesVC,_HTD);//copy over vector u
-	if(err!=cudaSuccess){printf("%s in %s at line %d\n",cudaGetErrorString(err),__FILE__,__LINE__);}
+	//if(err!=cudaSuccess){printf("%s in %s at line %d\n",cudaGetErrorString(err),__FILE__,__LINE__);}
 	err=cudaMemcpy(D_z,z,numbytesVC,_HTD);//copy over vector z
-	if(err!=cudaSuccess){printf("%s in %s at line %d\n",cudaGetErrorString(err),__FILE__,__LINE__);}
+	//if(err!=cudaSuccess){printf("%s in %s at line %d\n",cudaGetErrorString(err),__FILE__,__LINE__);}
 	err=cudaMemcpy(D_cuml_part,cum_part,Psize*sizeof(int),_HTD);
-	if(err!=cudaSuccess){printf("%s in %s at line %d\n",cudaGetErrorString(err),__FILE__,__LINE__);}
+	//if(err!=cudaSuccess){printf("%s in %s at line %d\n",cudaGetErrorString(err),__FILE__,__LINE__);}
 
 	err=cudaMemset(D_xresult,0,numbytesVC);//start x off with zeros
-	if(err!=cudaSuccess){printf("%s in %s at line %d\n",cudaGetErrorString(err),__FILE__,__LINE__);}
+	//if(err!=cudaSuccess){printf("%s in %s at line %d\n",cudaGetErrorString(err),__FILE__,__LINE__);}
 	//now all device memory allocated, copied and set to initial values
 
 	//Atb = A'*b;
 	cur=cublasSgemv_v2(handle,CUBLAS_OP_N,Acols,Arows,&t_alphA,D_A,Acols,D_b,1,&_beta,D_Atb,1);//Atb=AT*b,since D_A starts in row-major, not need to tranpose
-	if (cur != CUBLAS_STATUS_SUCCESS){
+	/*if (cur != CUBLAS_STATUS_SUCCESS){
 		printf("error code %d, line(%d)\n", cur, __LINE__);
         exit(EXIT_FAILURE);
-	}
+	}*/
 
 	//verified for rect
 	if(skinny){//A'*A + rho*eye(n)
 		cur=cublasSgemm_v2(handle,CUBLAS_OP_N,CUBLAS_OP_T,Acols,Acols,Arows,&t_alphA,D_A,Acols,D_A,Acols,&_rho,tmpM2,Acols);//tmpM2=AT*A+rho*eyeMatrix(tmpM2)
-		if(cur != CUBLAS_STATUS_SUCCESS){
+		/*if(cur != CUBLAS_STATUS_SUCCESS){
 			printf("error code %d, line(%d)\n", cur, __LINE__);
 			exit(EXIT_FAILURE);
-		}
+		}*/
 	}else{//speye(m) + 1/rho*(A*A')
 		float _InvRho=1.0f/_rho;
 		cur=cublasSgemm_v2(handle,CUBLAS_OP_T,CUBLAS_OP_N,Arows,Arows,Acols,&_InvRho,D_A,Acols,D_A,Acols,&t_alphA,tmpM2,Arows);//tmpM2=1/rho*(A*AT)+eye(Arows)
-		if(cur != CUBLAS_STATUS_SUCCESS){
+		/*if(cur != CUBLAS_STATUS_SUCCESS){
 			printf("error code %d, line(%d)\n", cur, __LINE__);
 			exit(EXIT_FAILURE);
-		}
+		}*/
 	}
 	//tmpM2 will act as  A'*A + rho*eye(n) if skinny, or as  eye(m) + 1/rho*(A*A') if fat
 
@@ -240,9 +244,9 @@ void mexFunction(int nlhs, mxArray *plhs[], int nrhs, mxArray const *prhs[]){//w
 		cloc=CPPBLOCK_SIZE*(todo-reps);
 		cloc2=CPPBLOCK_SIZE*(todo-reps+1);
 		cur=cublasSsyrk_v2(handle,CUBLAS_FILL_MODE_UPPER,CUBLAS_OP_T,n,k,&al,(float *)&tmpM2[rloc+cloc],N,&ba,(float *)&tmpM2[rloc+cloc2],N);
-		if(cur!=CUBLAS_STATUS_SUCCESS){
+		/*if(cur!=CUBLAS_STATUS_SUCCESS){
 			printf("cublas returned error code %d, line(%d)\n", cur, __LINE__);
-		}
+		}*/
 		reps--;
 	}
 	if(todo>1){
@@ -250,15 +254,15 @@ void mexFunction(int nlhs, mxArray *plhs[], int nrhs, mxArray const *prhs[]){//w
 		d_choldc_topleft_wrap(tmpM2,todo-2,N,threads);//d_choldc_topleft<<<1,threads>>>(tmpM2,todo-2,N)
 		d_choldc_strip_wrap(tmpM2,todo-2,N,stripgrid,threads);//d_choldc_strip<<<1,threads>>>(tmpM2,todo-2,N)
 		cur=cublasSsyrk_v2(handle,CUBLAS_FILL_MODE_UPPER,CUBLAS_OP_T,k,k,&al,(float *)&tmpM2[(k*(todo-1))*N +(k*(todo-2))],N,&ba,(float *)&tmpM2[(k*(todo-1))*N +(k*(todo-1))],N);
-		if(cur!=CUBLAS_STATUS_SUCCESS){
+		/*if(cur!=CUBLAS_STATUS_SUCCESS){
 			printf("cublas returned error code %d, line(%d)\n", cur, __LINE__);
-		}
+		}*/
 	}
 	d_choldc_topleft_wrap(tmpM2,todo-1,N,threads);//d_choldc_topleft<<<1,threads>>>(tmpM2,todo-1,N)
 
 	//now solve for inv(tmpM2) and store in L using cuBLAS
 	cur=cublasStrsm_v2(handle,CUBLAS_SIDE_LEFT,CUBLAS_FILL_MODE_UPPER,CUBLAS_OP_N,CUBLAS_DIAG_NON_UNIT,N,N,&t_alphA,tmpM2,N,L,N);
-	if(cur!=CUBLAS_STATUS_SUCCESS){printf("error code %d, line(%d)\n", cur, __LINE__);exit(EXIT_FAILURE);}
+	//if(cur!=CUBLAS_STATUS_SUCCESS){printf("error code %d, line(%d)\n", cur, __LINE__);exit(EXIT_FAILURE);}
     
 	//now L is inverse of cholesky factor, will be used in loop below
 	//now declare all variable which will be used in main solver loop
@@ -266,110 +270,101 @@ void mexFunction(int nlhs, mxArray *plhs[], int nrhs, mxArray const *prhs[]){//w
 	const float t_alpha=1.0f,t_beta=0.0f,neg_alpha=(1.0f-_alpha),neg=-1.0f,c0=sqrt(float(Acols))*abstol;
 
 	//these will be updated within loop so no init is required
-	float t_c,d_obj,history_obj,obj_p0,history_r_norm,history_s_norm,history_eps_pri,nx,nnegz,history_eps_dual,nru;
+	float t_c,d_obj,history_obj,obj_p0,history_r_norm=0.0f,history_s_norm=0.0f,history_eps_pri,history_eps_dual,xnorm,znorm;
 
+	int lambda_counter=0;
+	float last_r_norm, last_s_norm;
 	//MAIN LOOP
-	for(int i=1;i<=max_iter;i++){//use max_iter parameter passed into function
+	for(int i=1;i<=max_iter;i++){//use max_iter parameter passed into function, same as Tim's 'k'
 
-		err=cudaMemcpy(tempvecC,D_z,numbytesVC,cudaMemcpyDeviceToDevice);//copy z into tempvecC
-		if(err!=cudaSuccess){printf("%s in %s at line %d\n",cudaGetErrorString(err),__FILE__,__LINE__);}
-		cur=cublasSaxpy_v2(handle,Acols,&neg,D_u,1,tempvecC,1);//tempvecC now has result of (z-u),or -1*u + z
-		if(cur != CUBLAS_STATUS_SUCCESS){
-				printf("error code %d, line(%d)\n", cur, __LINE__);
-				exit(EXIT_FAILURE);
-			}
-		err=cudaMemcpy(tempvecC2,D_Atb,numbytesVC,cudaMemcpyDeviceToDevice);//copy Atb into tempvecC2
-		if(err!=cudaSuccess){printf("%s in %s at line %d\n",cudaGetErrorString(err),__FILE__,__LINE__);}
-		cur=cublasSaxpy_v2(handle,Acols,&_rho,tempvecC,1,tempvecC2,1);//now tempvecC2 has result of Atb + rho*(z - u), ( vector q in stanford ADMM)
-		if(cur != CUBLAS_STATUS_SUCCESS){
-				printf("error code %d, line(%d)\n", cur, __LINE__);
-				exit(EXIT_FAILURE);
-			}
-		//q or tempvecC2 will be Acols length
+		last_r_norm=history_r_norm;
+		last_s_norm=history_s_norm;//for lambda update
+
+		update_vector_q(D_Atb,D_z,D_u,tempvecC2,_rho,Acols);//tempvecC2 will be vector 'q'
 		
 		if(skinny){
 			cur=cublasSgemv_v2(handle,CUBLAS_OP_T,Acols,Acols,&t_alpha,L,Acols,tempvecC2,1,&t_beta,tempvecC,1);//tmpvecC=inv(L) * vector q(tempvec2)
-			if(cur != CUBLAS_STATUS_SUCCESS){
+			/*if(cur != CUBLAS_STATUS_SUCCESS){
 				printf("error code %d, line(%d)\n", cur, __LINE__);
 				exit(EXIT_FAILURE);
-			}
+			}*/
 			cur=cublasSgemv_v2(handle,CUBLAS_OP_N,Acols,Acols,&t_alpha,L,Acols,tempvecC,1,&t_beta,D_xresult,1);//x= U \ (L \ q) or x=inv(U)*(inv(L)*q
-			if(cur != CUBLAS_STATUS_SUCCESS){
+			/*if(cur != CUBLAS_STATUS_SUCCESS){
 				printf("error code %d, line(%d)\n", cur, __LINE__);
 				exit(EXIT_FAILURE);
-			}
+			}*/
 		}else{//careful here.. x = q/rho - (A'*(U \ ( L \ (A*q) )))/rho^2 , will start at innermost bracket (A*q) and work way out
 			cur=cublasSgemv_v2(handle,CUBLAS_OP_T,Acols,Arows,&t_alpha,D_A,Acols,tempvecC2,1,&t_beta,tempvecR,1);//tmpvecR=A * vector q(tempvec2)
-			if(cur != CUBLAS_STATUS_SUCCESS){
+			/*if(cur != CUBLAS_STATUS_SUCCESS){
 				printf("error code %d, line(%d)\n", cur, __LINE__);
 				exit(EXIT_FAILURE);
-			}
+			}*/
 			//v
 			cur=cublasSgemv_v2(handle,CUBLAS_OP_T,Arows,Arows,&t_alpha,L,Arows,tempvecR,1,&t_beta,D_xresult,1);//now D_xresult will be temp vec which=inv(L)*tmpmvec2(A*q)
-			if(cur != CUBLAS_STATUS_SUCCESS){
+			/*if(cur != CUBLAS_STATUS_SUCCESS){
 				printf("error code %d, line(%d)\n", cur, __LINE__);
 				exit(EXIT_FAILURE);
-			}
+			}*/
 			//v
 			cur=cublasSgemv_v2(handle,CUBLAS_OP_N,Arows,Arows,&t_alpha,L,Arows,D_xresult,1,&t_beta,tempvecR,1);//now tempvecC will be temp vec which=inv(U)*inv(L)*tmpmvec2(A*q)
-			if(cur != CUBLAS_STATUS_SUCCESS){
+			/*if(cur != CUBLAS_STATUS_SUCCESS){
 				printf("error code %d, line(%d)\n", cur, __LINE__);
 				exit(EXIT_FAILURE);
-			}
+			}*/
 			//v
 			cur=cublasSgemv_v2(handle,CUBLAS_OP_N,Acols,Arows,&t_alpha,D_A,Acols,tempvecR,1,&t_beta,D_xresult,1);//now D_xresult will be temp vec which=AT*inv(U)*inv(L)*tmpmvec2(A*q)
-			if(cur != CUBLAS_STATUS_SUCCESS){
+			/*if(cur != CUBLAS_STATUS_SUCCESS){
 				printf("error code %d, line(%d)\n", cur, __LINE__);
 				exit(EXIT_FAILURE);
-			}
+			}*/
 			//v
 			t_c= -(1.0f/(_rho*_rho));
 			cur=cublasSscal_v2(handle,Acols,&t_c,D_xresult,1);//scale D_xresult by -1/rho^2
-			if(cur != CUBLAS_STATUS_SUCCESS){
+			/*if(cur != CUBLAS_STATUS_SUCCESS){
 				printf("error code %d, line(%d)\n", cur, __LINE__);
 				exit(EXIT_FAILURE);
-			}
+			}*/
 			t_c=(1.0f/_rho);
 			cur=cublasSaxpy_v2(handle,Acols,&t_c,tempvecC2,1,D_xresult,1);// D_xresult=q/rho+ D_xresult
-			if(cur != CUBLAS_STATUS_SUCCESS){
+			/*if(cur != CUBLAS_STATUS_SUCCESS){
 				printf("error code %d, line(%d)\n", cur, __LINE__);
 				exit(EXIT_FAILURE);
-			}
+			}*/
 			//v
 		}
 		//verified 
 		err=cudaMemcpy(tempvecC,D_z,numbytesVC,cudaMemcpyDeviceToDevice);//copy z into tempvecC,will act as 'zold'
-		if(err!=cudaSuccess){printf("%s in %s at line %d\n",cudaGetErrorString(err),__FILE__,__LINE__);}
+		//if(err!=cudaSuccess){printf("%s in %s at line %d\n",cudaGetErrorString(err),__FILE__,__LINE__);}
 
 		err=cudaMemcpy(x_hat,D_xresult,numbytesVC,cudaMemcpyDeviceToDevice);//set x_hat to cur val xresult
-		if(err!=cudaSuccess){printf("%s in %s at line %d\n",cudaGetErrorString(err),__FILE__,__LINE__);}
+		//if(err!=cudaSuccess){printf("%s in %s at line %d\n",cudaGetErrorString(err),__FILE__,__LINE__);}
 
 		//for kernel calls related to the vectors
 
 		gpu_inplace_vector_scale_wrap(x_hat,Acols,_alpha,num_v_blocks);//gpu_inplace_vector_scale<<<num_v_blocks,THREADS>>>(x_hat,Acols,_alpha);//xhat*=alpha
 		
 		cur=cublasSaxpy_v2(handle,Acols,&neg_alpha,tempvecC,1,x_hat,1);//x_hat+=(1-alpha)*(tempvecC);
-		if(cur != CUBLAS_STATUS_SUCCESS){
+		/*if(cur != CUBLAS_STATUS_SUCCESS){
 				printf("error code %d, line(%d)\n", cur, __LINE__);
 				exit(EXIT_FAILURE);
-			}
+			}*/
 
 		//verified
 		//here is the loop which differentiates the group lasso from the lasso,tempvecC2 will store the sectional results used in updating D_z
 		t_c=_lambda/_rho;//kappa
 		err=cudaMemset(norm_s,0,num_k_bytes);
-		if(err!=cudaSuccess){printf("%s in %s at line %d\n",cudaGetErrorString(err),__FILE__,__LINE__);}
+		//if(err!=cudaSuccess){printf("%s in %s at line %d\n",cudaGetErrorString(err),__FILE__,__LINE__);}
 		err=cudaMemset(t_obj_arr,0,num_k_bytes);
-		if(err!=cudaSuccess){printf("%s in %s at line %d\n",cudaGetErrorString(err),__FILE__,__LINE__);}
+		//if(err!=cudaSuccess){printf("%s in %s at line %d\n",cudaGetErrorString(err),__FILE__,__LINE__);}
 		err=cudaMemset(z_norm_sum,0,sizeof(float));
-		if(err!=cudaSuccess){printf("%s in %s at line %d\n",cudaGetErrorString(err),__FILE__,__LINE__);}
+		//if(err!=cudaSuccess){printf("%s in %s at line %d\n",cudaGetErrorString(err),__FILE__,__LINE__);}
 		//call helper
 		z_shrinkage_wrap(D_z,x_hat,D_u,norm_s,t_obj_arr,z_norm_sum,adj_size,PGrid,D_cuml_part,rem_start,t_c,num_blx,err);
 
 		//updated z by section in parallel and copy back z_norm_sum to host
 
 		err=cudaMemcpy(&d_obj,z_norm_sum,sizeof(float),_DTH);
-		if(err!=cudaSuccess){printf("%s in %s at line %d\n",cudaGetErrorString(err),__FILE__,__LINE__);}
+		//if(err!=cudaSuccess){printf("%s in %s at line %d\n",cudaGetErrorString(err),__FILE__,__LINE__);}
 		//
 		
 		gpu_lasso_u_update_wrap(D_u,x_hat,D_z,Acols,num_v_blocks);//gpu_lasso_u_update<<<num_v_blocks,THREADS>>>(D_u,x_hat,D_z,Acols);//u = u + (x_hat - z);
@@ -379,81 +374,55 @@ void mexFunction(int nlhs, mxArray *plhs[], int nrhs, mxArray const *prhs[]){//w
 		obj_p0=0.0f;
 		history_obj=0.0f;
 		ba=0.0f;
-		//same as lasso, but the z portion of objective is different due to blocks/partitioning
-		cur=cublasSgemv_v2(handle,CUBLAS_OP_T,Acols,Arows,&t_alpha,D_A,Acols,D_xresult,1,&ba,tempvecR,1);//tempvecR=A*x_result, size Arows
-		if(cur != CUBLAS_STATUS_SUCCESS){
-			printf("error code %d, line(%d)\n", cur, __LINE__);
-			exit(EXIT_FAILURE);
-		}
-
-		gpu_lasso_objective_helper_wrap(tempvecR,D_b,Arows,num_vr_blocks);//_gpu_lasso_objective_helper<<<num_vr_blocks,THREADS>>>(tempvecR,D_b,Arows);//tempvecR will have vector result of (A*x-b).^2
-		
-		cur=cublasSasum_v2(handle,Arows,tempvecR,1,&obj_p0);//sum up ((A*x - b).^2), can use asum because all values of tempvecC2 are positive
-		if(cur != CUBLAS_STATUS_SUCCESS){
-			printf("error code %d, line(%d)\n", cur, __LINE__);
-			exit(EXIT_FAILURE);
-		}
-		history_obj=0.5f*obj_p0+_lambda*d_obj;//gpu objective=( 1/2*sum((A*x - b).^2) + lambda*obj )
-		al=-1.0f;
-
-		//history.r_norm(k)  = norm(x - z);
-		history_r_norm=0.0f;
-		err=cudaMemcpy(tempvecC2,D_xresult,numbytesVC,cudaMemcpyDeviceToDevice);//tempvecC2 will have a copy of d_z
-		if(err!=cudaSuccess){printf("%s in %s at line %d\n",cudaGetErrorString(err),__FILE__,__LINE__);}
-
-		cur=cublasSaxpy_v2(handle,Acols,&neg,D_z,1,tempvecC2,1);//tempvecC2 has the result of (x-z) or (-z+x)
-		if(cur != CUBLAS_STATUS_SUCCESS){
+		if(do_objective!=0){//
+			//same as lasso, but the z portion of objective is different due to blocks/partitioning
+			cur=cublasSgemv_v2(handle,CUBLAS_OP_T,Acols,Arows,&t_alpha,D_A,Acols,D_xresult,1,&ba,tempvecR,1);//tempvecR=A*x_result, size Arows
+			/*if(cur != CUBLAS_STATUS_SUCCESS){
 				printf("error code %d, line(%d)\n", cur, __LINE__);
 				exit(EXIT_FAILURE);
+			}*/
+
+			gpu_lasso_objective_helper_wrap(tempvecR,D_b,Arows,num_vr_blocks);//_gpu_lasso_objective_helper<<<num_vr_blocks,THREADS>>>(tempvecR,D_b,Arows);//tempvecR will have vector result of (A*x-b).^2
+		
+			cur=cublasSasum_v2(handle,Arows,tempvecR,1,&obj_p0);//sum up ((A*x - b).^2), can use asum because all values of tempvecR are positive
+			/*if(cur != CUBLAS_STATUS_SUCCESS){
+				printf("error code %d, line(%d)\n", cur, __LINE__);
+				exit(EXIT_FAILURE);
+			}*/
+			history_obj=0.5f*obj_p0+_lambda*d_obj;//gpu objective=( 1/2*sum((A*x - b).^2) + lambda*obj )
+		}
+		// now try to do all norms at once,D_x is x, D_u is u, D_z is z, tempvecC is zold. Will use tempvecR as the 5 elem device arary to store the norm results
+		//
+		err=cudaMemset(tempvecR,0,6*sizeof(float));
+		get_multi_norms(D_xresult,D_z,tempvecC, D_u, tempvecR, _rho,Acols);
+
+		err=cudaMemcpy(&xnorm,tempvecR,sizeof(float),_DTH);
+		err=cudaMemcpy(&znorm,&tempvecR[1],sizeof(float),_DTH);
+		err=cudaMemcpy(&history_r_norm,&tempvecR[2],sizeof(float),_DTH);
+		err=cudaMemcpy(&history_s_norm,&tempvecR[3],sizeof(float),_DTH);
+		err=cudaMemcpy(&history_eps_dual,&tempvecR[4],sizeof(float),_DTH);
+
+		xnorm=sqrtf(xnorm);
+		znorm=sqrtf(znorm);
+
+		history_r_norm=sqrtf(history_r_norm);
+		history_s_norm=sqrtf(history_s_norm);
+
+		history_eps_pri=c0+reltol*max(xnorm,znorm);
+		history_eps_dual=c0+reltol*sqrtf(history_eps_dual);
+		if(history_r_norm<history_eps_pri && history_s_norm<history_eps_dual)break;//termination condition	
+
+		//lambda update
+		if(do_lambda_update && i>1){
+			if(fabs(history_r_norm-last_r_norm)<0.00001f &&
+				fabs(history_s_norm-last_s_norm)<0.00001f){
+					lambda_counter++;
+					if(lambda_counter>10){
+						_lambda*=0.01f;
+						lambda_counter=0;
+					}
 			}
-
-		cur=cublasSnrm2_v2(handle,Acols,tempvecC2,1,&history_r_norm);//get gpu euclid norm
-		if(cur != CUBLAS_STATUS_SUCCESS){
-			printf("error code %d, line(%d)\n", cur, __LINE__);
-			exit(EXIT_FAILURE);
 		}
-		//verified
-		//history.s_norm(k)  = norm(-rho*(z - zold));
-		history_s_norm=0.0f;
-		
-		gpu_lasso_h_helper_wrap(D_z,tempvecC,tempvecC2,_rho,Acols,num_v_blocks);//gpu_lasso_h_helper<<<num_v_blocks,THREADS>>>(D_z,tempvecC,tempvecC2,_rho,Acols);//tempvecC2 will have result of -rho*(z - zold)
-		
-		cur=cublasSnrm2_v2(handle,Acols,tempvecC2,1,&history_s_norm);//get gpu euclid norm
-		if(cur != CUBLAS_STATUS_SUCCESS){
-			printf("error code %d, line(%d)\n", cur, __LINE__);
-			exit(EXIT_FAILURE);
-		}
-		//verified
-		//history.eps_pri(k) = sqrt(n)*ABSTOL + RELTOL*max(norm(x), norm(-z));
-		history_eps_pri=0.0f;
-		nx=0.0f;
-		nnegz=0.0f;
-		cur=cublasSnrm2_v2(handle,Acols,D_xresult,1,&nx);//get gpu euclid norm
-		if(cur != CUBLAS_STATUS_SUCCESS){
-			printf("error code %d, line(%d)\n", cur, __LINE__);
-			exit(EXIT_FAILURE);
-		}
-		cur=cublasSnrm2_v2(handle,Acols,D_z,1,&nnegz);//get gpu euclid norm
-		if(cur != CUBLAS_STATUS_SUCCESS){
-			printf("error code %d, line(%d)\n", cur, __LINE__);
-			exit(EXIT_FAILURE);
-		}
-		history_eps_pri=c0+reltol*max(nx,nnegz);
-		//verified
-		//history.eps_dual(k)= sqrt(n)*ABSTOL + RELTOL*norm(rho*u)
-		history_eps_dual=0.0f;
-		nru=0.0f;
-		err=cudaMemcpy(tempvecC2,D_u,numbytesVC,cudaMemcpyDeviceToDevice);//tempvecC2 will have value of vector u(device)
-		if(err!=cudaSuccess){printf("%s in %s at line %d\n",cudaGetErrorString(err),__FILE__,__LINE__);}
-
-		gpu_inplace_vector_scale_wrap(tempvecC2,Acols,_rho,num_v_blocks);//gpu_inplace_vector_scale<<<num_v_blocks,THREADS>>>(tempvecC2, Acols,_rho);//u*rho
-		cur=cublasSnrm2_v2(handle,Acols,tempvecC2,1,&nru);//get gpu euclid norm
-		if(cur != CUBLAS_STATUS_SUCCESS){
-			printf("error code %d, line(%d)\n", cur, __LINE__);
-			exit(EXIT_FAILURE);
-		}
-		history_eps_dual=c0+reltol*nru;
-		if(history_r_norm<=history_eps_pri && history_s_norm<=history_eps_dual)break;//termination condition	
 	}
 
 	//create answer for Matlab and copy back vectors u and z
@@ -464,45 +433,45 @@ void mexFunction(int nlhs, mxArray *plhs[], int nrhs, mxArray const *prhs[]){//w
 	float *z_result=(float *)mxGetPr(plhs[1]);
 
 	err=cudaMemcpy(u_result,D_u,numbytesVC,_DTH);//copy  u info back to host
-	if(err!=cudaSuccess){printf("%s in %s at line %d\n",cudaGetErrorString(err),__FILE__,__LINE__);}
+	//if(err!=cudaSuccess){printf("%s in %s at line %d\n",cudaGetErrorString(err),__FILE__,__LINE__);}
 	err=cudaMemcpy(z_result,D_z,numbytesVC,_DTH);//copy  z info back to host
-	if(err!=cudaSuccess){printf("%s in %s at line %d\n",cudaGetErrorString(err),__FILE__,__LINE__);}
+	//if(err!=cudaSuccess){printf("%s in %s at line %d\n",cudaGetErrorString(err),__FILE__,__LINE__);}
 
 	free(cum_part);//free host memory
 
 	//free all device memory
 	err=cudaFree(D_A);
-	if(err!=cudaSuccess){printf("%s in %s at line %d\n",cudaGetErrorString(err),__FILE__,__LINE__);}
+	//if(err!=cudaSuccess){printf("%s in %s at line %d\n",cudaGetErrorString(err),__FILE__,__LINE__);}
 	err=cudaFree(D_b);
-	if(err!=cudaSuccess){printf("%s in %s at line %d\n",cudaGetErrorString(err),__FILE__,__LINE__);}
+	//if(err!=cudaSuccess){printf("%s in %s at line %d\n",cudaGetErrorString(err),__FILE__,__LINE__);}
 	err=cudaFree(D_xresult);
-	if(err!=cudaSuccess){printf("%s in %s at line %d\n",cudaGetErrorString(err),__FILE__,__LINE__);}
+	//if(err!=cudaSuccess){printf("%s in %s at line %d\n",cudaGetErrorString(err),__FILE__,__LINE__);}
 	err=cudaFree(D_Atb);
-	if(err!=cudaSuccess){printf("%s in %s at line %d\n",cudaGetErrorString(err),__FILE__,__LINE__);}
+	//if(err!=cudaSuccess){printf("%s in %s at line %d\n",cudaGetErrorString(err),__FILE__,__LINE__);}
 	err=cudaFree(D_u);
-	if(err!=cudaSuccess){printf("%s in %s at line %d\n",cudaGetErrorString(err),__FILE__,__LINE__);}
+	//if(err!=cudaSuccess){printf("%s in %s at line %d\n",cudaGetErrorString(err),__FILE__,__LINE__);}
 	err=cudaFree(D_z);
-	if(err!=cudaSuccess){printf("%s in %s at line %d\n",cudaGetErrorString(err),__FILE__,__LINE__);}
+	//if(err!=cudaSuccess){printf("%s in %s at line %d\n",cudaGetErrorString(err),__FILE__,__LINE__);}
 	err=cudaFree(tempvecC);
-	if(err!=cudaSuccess){printf("%s in %s at line %d\n",cudaGetErrorString(err),__FILE__,__LINE__);}
+	//if(err!=cudaSuccess){printf("%s in %s at line %d\n",cudaGetErrorString(err),__FILE__,__LINE__);}
 	err=cudaFree(tempvecC2);
-	if(err!=cudaSuccess){printf("%s in %s at line %d\n",cudaGetErrorString(err),__FILE__,__LINE__);}
+	//if(err!=cudaSuccess){printf("%s in %s at line %d\n",cudaGetErrorString(err),__FILE__,__LINE__);}
 	err=cudaFree(tempvecR);
-	if(err!=cudaSuccess){printf("%s in %s at line %d\n",cudaGetErrorString(err),__FILE__,__LINE__);}
+	//if(err!=cudaSuccess){printf("%s in %s at line %d\n",cudaGetErrorString(err),__FILE__,__LINE__);}
 	err=cudaFree(x_hat);
-	if(err!=cudaSuccess){printf("%s in %s at line %d\n",cudaGetErrorString(err),__FILE__,__LINE__);}
+	//if(err!=cudaSuccess){printf("%s in %s at line %d\n",cudaGetErrorString(err),__FILE__,__LINE__);}
 	err=cudaFree(L);
-	if(err!=cudaSuccess){printf("%s in %s at line %d\n",cudaGetErrorString(err),__FILE__,__LINE__);}
+	//if(err!=cudaSuccess){printf("%s in %s at line %d\n",cudaGetErrorString(err),__FILE__,__LINE__);}
 	err=cudaFree(tmpM2);
-	if(err!=cudaSuccess){printf("%s in %s at line %d\n",cudaGetErrorString(err),__FILE__,__LINE__);}
+	//if(err!=cudaSuccess){printf("%s in %s at line %d\n",cudaGetErrorString(err),__FILE__,__LINE__);}
 	err=cudaFree(norm_s);
-	if(err!=cudaSuccess){printf("%s in %s at line %d\n",cudaGetErrorString(err),__FILE__,__LINE__);}
+	//if(err!=cudaSuccess){printf("%s in %s at line %d\n",cudaGetErrorString(err),__FILE__,__LINE__);}
 	err=cudaFree(t_obj_arr);
-	if(err!=cudaSuccess){printf("%s in %s at line %d\n",cudaGetErrorString(err),__FILE__,__LINE__);}
+	//if(err!=cudaSuccess){printf("%s in %s at line %d\n",cudaGetErrorString(err),__FILE__,__LINE__);}
 	err=cudaFree(z_norm_sum);
-	if(err!=cudaSuccess){printf("%s in %s at line %d\n",cudaGetErrorString(err),__FILE__,__LINE__);}
+	//if(err!=cudaSuccess){printf("%s in %s at line %d\n",cudaGetErrorString(err),__FILE__,__LINE__);}
 	err=cudaFree(D_cuml_part);
-	if(err!=cudaSuccess){printf("%s in %s at line %d\n",cudaGetErrorString(err),__FILE__,__LINE__);}
+	//if(err!=cudaSuccess){printf("%s in %s at line %d\n",cudaGetErrorString(err),__FILE__,__LINE__);}
 
 	checkError(cublasDestroy(handle), "cublasDestroy() error!\n");
 }

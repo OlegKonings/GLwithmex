@@ -391,4 +391,77 @@ extern "C" void z_shrinkage_wrap(float *D_z,const float *x_hat, const float *D_u
 		//End partition loop, updated vector z by section and got the sum of the norms of Z into d_obj for later use by objective
 }
 
+//need norm of x, -z , (x-z), -rho*(z-zold), rho*u
+__global__ void _get_norm_all(const float* __restrict__ x, const float * __restrict__ z, const float* __restrict__ zold, const float* __restrict__ u,
+	float* __restrict__ xnorm, float* __restrict__ znorm, float* __restrict__ xznorm, float* __restrict__ rzznorm,float* __restrict__ runorm,
+	const int length, const float _rho){
 
+		const int offset=threadIdx.x+blockIdx.x*blockDim.x;
+		const int warp_idx=threadIdx.x%32;
+
+		__shared__ float x_sq_sum[2],
+			z_sq_sum[2],
+			x_minus_z_sum[2],
+			neg_rho_zzold_sum[2],
+			rho_u_sum[2];
+
+		float xx=0.0f,zz=0.0f,xz=0.0f, zzold=0.0f,ru=0.0f, tmp=0.0f;
+
+		if(offset<length){
+			xx=x[offset];
+			zz=z[offset];
+			xz=(xx-zz)*(xx-zz);//rnorm calc
+			tmp= -_rho*(zz-zold[offset]);
+			zzold=tmp*tmp;//snorm calc
+			xx*=xx;//norm x
+			zz*=zz;//norm (-z)
+			ru=_rho*u[offset];
+			ru*=ru;//norm (rho*u)
+		}
+		for(int ii=16;ii>0;ii>>=1){
+			xx += __shfl(xx, warp_idx + ii);
+			zz += __shfl(zz, warp_idx + ii);
+			xz += __shfl(xz, warp_idx + ii);
+			zzold += __shfl(zzold, warp_idx + ii);
+			ru += __shfl(ru, warp_idx + ii);
+			
+		}
+		if(warp_idx==0){
+			x_sq_sum[threadIdx.x>>5]=xx;
+			z_sq_sum[threadIdx.x>>5]=zz;
+			x_minus_z_sum[threadIdx.x>>5]=xz;
+			neg_rho_zzold_sum[threadIdx.x>>5]=zzold;
+			rho_u_sum[threadIdx.x>>5]=ru;		
+		}
+		__syncthreads();
+
+		if(threadIdx.x==0){
+			atomicAdd(&xnorm[0],(x_sq_sum[0]+x_sq_sum[1]));
+			atomicAdd(&znorm[0],(z_sq_sum[0]+z_sq_sum[1]));
+			atomicAdd(&xznorm[0],(x_minus_z_sum[0]+x_minus_z_sum[1]));
+			atomicAdd(&rzznorm[0],(neg_rho_zzold_sum[0]+neg_rho_zzold_sum[1]));
+			atomicAdd(&runorm[0],(rho_u_sum[0]+rho_u_sum[1]));
+
+		}
+
+}
+
+extern "C" void get_multi_norms(const float *x, const float *z, const float *zold, const float *u,
+	float *norm_arr,const float _rho, const int length){
+
+		_get_norm_all<<<(length+THREADS-1)/THREADS,THREADS>>>(x,z,zold,u,&norm_arr[0], &norm_arr[1], &norm_arr[2],&norm_arr[3],&norm_arr[4], length,_rho);
+}
+
+__global__ void update_q(const float* __restrict__ Atb, const float* __restrict__  z, const float* __restrict__ u,
+	float* __restrict__ q, const float rho, const int length){
+
+		const int offset=threadIdx.x+blockIdx.x*blockDim.x;
+
+		if(offset<length){
+			q[offset]= (Atb[offset]+rho*(z[offset]-u[offset]));
+		}
+}
+extern "C" void update_vector_q(const float *Atb, const float *z, const float *u, float *q, const float rho,const int length){
+	update_q<<<(length+THREADS-1)/THREADS,THREADS>>>(Atb,z,u,q,rho,length);
+
+}
