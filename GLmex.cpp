@@ -418,7 +418,7 @@ void mexFunction(int nlhs, mxArray *plhs[], int nrhs, mxArray const *prhs[]){//w
 				fabs(history_s_norm-last_s_norm)<0.00001f){
 					lambda_counter++;
 					if(lambda_counter>10){
-						_lambda*=0.01f;
+						_lambda*=0.1f;
 						lambda_counter=0;
 					}
 			}
