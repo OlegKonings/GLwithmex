@@ -9,6 +9,7 @@ This implementation is a mostly literal translation of the solver, with the adde
 
 
 inputs from MATLAB are (in order)
+
 	0) Matrix A (m,n) single precision floating point numbers (32 bit) in DENSE form AND must be passed into mex in TRANSPOSE form due to row-major format(will adjust m and n internally)
 	1) vector b (m,1) single precision floating point numbers
 	2) vector p (Psize length) 32 bit integer of K(Psize) length (partitions)
@@ -22,7 +23,8 @@ inputs from MATLAB are (in order)
 	10) lambda array
 	11) 32 bit integer array which will return the number of iterations until convergence for each lambda(size of array is equal to number of lambdas)
 
-	outputs are (in order)
+outputs are (in order)
+	
 	0) vector u (n,lambdas) single precision floating point numbers
 	1) vector z (n,lambdas) single precision floating point numbers
 	2) vector num_iters (num_lambdas,1) 32-bit integer array
