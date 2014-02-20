@@ -1,17 +1,13 @@
 function [ A,b,partition,lambda ] = GenerateRandomGroupLassoDataSet( m,K,density )% density default value should be 100
 
-flag=true;
-while flag
-    partition = int32(randi(225, [K 1]));% per Boyd example
-    n = int32(sum(partition)); % number of features
-    if (mod(n,16))==0
-        flag=false;
-    end
-end
+
+partition = int32(randi(175, [K 1]));% per Boyd example
+n = int32(sum(partition)); % number of features
+ 
 
 p = single(density/single(n));          % sparsity density
 
-% generate block sparse solution vector
+
 x = single(zeros(n,1));
 start_ind = int32(1);
 cum_part = int32(cumsum(single(partition)));
