@@ -58,6 +58,9 @@ CUDA mex vs MATLAB 6-core 3.9 Ghz comparison:
 <tr>
     <td> 5000x1491 </td><td>30</td><td> 1369 ms </td><td> 75 ms </td><td> 18.25x</td>
 </tr>
+<tr>
+    <td> 10000x1142 </td><td>30</td><td> 1329 ms </td><td> 62 ms </td><td> 21.43x</td>
+</tr>
 </table>
 ___
 
