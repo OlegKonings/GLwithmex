@@ -33,3 +33,35 @@ outputs are (in order)
 	NOTE: compile with --use_fast_math and for better parallel performance set environment variable CUDA_DEVICE_MAX_CONNECTIONS to 32 if using the Tesla line GPUs. 
 	
 	Testing was done with default CUDA_DEVICE_MAX_CONNECTIONS=8, but if testing more lambdas increase to number of lambdas.
+	
+	
+NOTE: no overlocking of GPU, is running at stock 706 Mhz
+
+CUDA mex vs MATLAB 6-core 3.9 Ghz comparison:
+---
+<table>
+<tr>
+    <th>dimensions A</th><th>number of lambdas</th><th> 6-core 3.9 Ghz MATLAB time </th><th> CUDA time </th><th> CUDA Speedup</th>
+</tr>
+    <tr>
+    <td> 1920x956 </td><td>17</td><td> 463 ms </td><td> 26 ms </td><td> 17.8x</td>
+  </tr
+  <tr>
+    <td> 1133x1545 </td><td>17</td><td> 862 ms </td><td> 72 ms </td><td> 11.9x</td>
+</tr>
+<tr>
+    <td> 2000x1243 </td><td>24</td><td> 1023 ms </td><td> 49 ms </td><td> 20.8x</td>
+</tr>
+<tr>
+    <td> 1111x1537 </td><td>24</td><td> 1144 ms </td><td> 89 ms </td><td> 12.85x</td>
+</tr>
+<tr>
+    <td> 5000x1491 </td><td>30</td><td> 1369 ms </td><td> 75 ms </td><td> 18.25x</td>
+</tr>
+</table>
+___
+
+
+NOTE: First call of any GPU related mex interface from MATLAB will be at least 10x slower than subsequent calls, due to intial context setup. In general MATLAB adds 10-20 ms of running time vs. a clean C++ API library call to the same function.
+
+Will perform better on 'skinny' matrices (where num_rows>=num_cols) due to fewer operations needed for that shape of Matrix.
