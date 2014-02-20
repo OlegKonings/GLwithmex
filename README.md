@@ -5,7 +5,7 @@ mex interface for CUDA implementation of Stephen Boyd's admm group lasso solver,
 
 http://www.stanford.edu/~boyd/papers/admm/group_lasso/group_lasso.html
 
-This implementation is a mostly literal translation of the solver, with the added ability to test up to 31 lambdas in parallel. Can operate on any shape of matrix A, but should be at least size (32,32), otherwise the infernal MATLAB mex overheads will no make the call worthwhile.
+This implementation is a mostly literal translation of the solver, with the added ability to test up to 31 lambdas in parallel. Can operate on any shape of dense matrix A, but should be at least size (32,32), otherwise the infernal MATLAB mex overheads will no make the call worthwhile.
 
 
 inputs from MATLAB are (in order)
