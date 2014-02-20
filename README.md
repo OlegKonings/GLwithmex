@@ -41,7 +41,7 @@ CUDA mex vs MATLAB 6-core 3.9 Ghz comparison:
 ---
 <table>
 <tr>
-    <th>dimensions A</th><th>number of lambdas</th><th> 6-core 3.9 Ghz MATLAB time </th><th> CUDA time </th><th> CUDA Speedup</th>
+    <th>dimensions A</th><th>number of lambdas</th><th> 6-core 3.9 Ghz MATLAB time </th><th> CUDA mex time </th><th> CUDA Speedup</th>
 </tr>
     <tr>
     <td> 1920x956 </td><td>17</td><td> 463 ms </td><td> 26 ms </td><td> 17.8x</td>
