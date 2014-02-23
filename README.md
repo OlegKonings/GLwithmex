@@ -68,3 +68,16 @@ ___
 NOTE: First call of any GPU related mex interface from MATLAB will be at least 10x slower than subsequent calls, due to intial context setup. In general MATLAB adds 10-20 ms of running time vs. a clean C++ API library call to the same function.
 
 Will perform better on 'skinny' matrices (where num_rows>=num_cols) due to fewer operations needed for that shape of Matrix.
+ <script>
+  (function(i,s,o,g,r,a,m){i['GoogleAnalyticsObject']=r;i[r]=i[r]||function(){
+  (i[r].q=i[r].q||[]).push(arguments)},i[r].l=1*new Date();a=s.createElement(o),
+  m=s.getElementsByTagName(o)[0];a.async=1;a.src=g;m.parentNode.insertBefore(a,m)
+  })(window,document,'script','//www.google-analytics.com/analytics.js','ga');
+
+  ga('create', 'UA-43459430-1', 'github.com');
+  ga('send', 'pageview');
+
+</script>
+
+[![githalytics.com alpha](https://cruel-carlota.pagodabox.com/8024c83bd0328155085f6a67bc179d04 "githalytics.com")](http://githalytics.com/OlegKonings/CUDA_brute_triangle)
+
